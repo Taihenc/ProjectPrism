@@ -1,29 +1,32 @@
 {
-  "name": "ProjectPrism",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "project-prism",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Interactive knowledge graph of your projects and skills, for developer portfolios.",
+  "license": "MIT",
+  "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@pixi/graphics": "^7.4.2",
-    "@pixi/react": "^7.1.2",
-    "animejs": "^3.2.2",
-    "pixi.js": "^8.2.1",
+    "@heroicons/react": "^2.2.0",
+    "d3-force": "^3.0.0",
+    "framer-motion": "^11.18.2",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-force-graph-2d": "^1.29.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
-    "typescript": "^5.5.2",
-    "vite": "^5.3.2"
+    "@types/d3-force": "^3.0.10",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.5.5",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
   }
 }

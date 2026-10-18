@@ -1,6 +1,8 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
+// Served from https://taihenc.github.io/ProjectPrism/
 export default defineConfig({
-    plugins: [react()],
-});
+  base: '/ProjectPrism/',
+  plugins: [react()],
+})
