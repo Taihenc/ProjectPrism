@@ -117,6 +117,8 @@ interface PrismGraphProps {
   graph: KnowledgeGraph
 }
 
+type Camera = { x: number; y: number; k: number }
+
 /** Canvas renderer for a `KnowledgeGraph`. All content comes from props. */
 export default function PrismGraph({ graph }: PrismGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -128,6 +130,8 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Legend filter: lights up every node in one group (hover and selection still win).
+  const [groupFilter, setGroupFilter] = useState<string | null>(null)
   const [imagesLoaded, setImagesLoaded] = useState(0)
   const coarse = useMediaQuery('(pointer: coarse)')
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -135,6 +139,10 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
   const nodeAlpha = useRef(new Map<string, number>())
   const linkLit = useRef(new WeakMap<SimLink, number>())
   const frame = useRef({ now: performance.now(), dt: 0 })
+  const glide = useRef<{ from: Camera; to: Camera; start: number; ms: number } | null>(null)
+  // Live hit test and click handler, read from native listeners that are bound once.
+  const nodeAtRef = useRef<(ev: PointerEvent) => SimNode | undefined>(() => undefined)
+  const clickAtRef = useRef<(ev: PointerEvent) => void>(() => {})
   // Free pan/zoom. Off by default so the graph never traps page scrolling.
   const [explore, setExplore] = useState(false)
   // force-graph keeps the first interaction filter it receives, so read live state via a ref.
@@ -253,6 +261,7 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
       lastWheel = now
       if (owner === 'page') return
       ev.preventDefault()
+      glide.current = null
       const k = fg.zoom()
       const { x, y } = fg.centerAt()
       fg.centerAt(x + ev.deltaX / k, y + ev.deltaY / k)
@@ -260,10 +269,44 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
     const onTouch = (ev: TouchEvent) => {
       if (ev.touches.length >= 2 && ev.cancelable) ev.preventDefault()
     }
+    // Clicks are detected here rather than by force-graph, which drops any click
+    // whose press overlaps a camera step (it reads that as a drag).
+    let down: { x: number; y: number; t: number } | null = null
+    const onDown = (ev: PointerEvent) => {
+      glide.current = null // any press hands the camera back to the user
+      // A second finger makes it a pinch / pan, not a tap.
+      down = ev.isPrimary ? { x: ev.clientX, y: ev.clientY, t: performance.now() } : null
+    }
+    const onUp = (ev: PointerEvent) => {
+      if (!down || !ev.isPrimary) return
+      const tap =
+        Math.hypot(ev.clientX - down.x, ev.clientY - down.y) < 6 &&
+        performance.now() - down.t < 600
+      down = null
+      if (tap) clickAtRef.current(ev)
+    }
+    const onCancel = () => (down = null) // the browser took the touch for scrolling
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerType !== 'mouse' || ev.buttons) return
+      const n = nodeAtRef.current(ev)
+      setHoverId(n ? String(n.id) : null)
+      el.style.cursor = n ? 'pointer' : ''
+    }
+    const onLeave = () => setHoverId(null)
+    el.addEventListener('pointerdown', onDown)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointercancel', onCancel)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerleave', onLeave)
     el.addEventListener('wheel', onWheel, { passive: false })
     el.addEventListener('touchstart', onTouch, { passive: false })
     el.addEventListener('touchmove', onTouch, { passive: false })
     return () => {
+      el.removeEventListener('pointerdown', onDown)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onCancel)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerleave', onLeave)
       el.removeEventListener('wheel', onWheel)
       el.removeEventListener('touchstart', onTouch)
       el.removeEventListener('touchmove', onTouch)
@@ -272,29 +315,17 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
 
   const focusId = hoverId ?? selectedId
   const highlighted = useMemo(() => {
-    if (!focusId) return null
-    const set = new Set([focusId])
-    index.neighbors.get(focusId)?.forEach((n) => set.add(n.node.id))
-    return set
-  }, [focusId, index])
+    if (focusId) {
+      const set = new Set([focusId])
+      index.neighbors.get(focusId)?.forEach((n) => set.add(n.node.id))
+      return set
+    }
+    if (groupFilter)
+      return new Set(graph.nodes.filter((n) => n.group === groupFilter).map((n) => n.id))
+    return null
+  }, [focusId, index, groupFilter, graph.nodes])
 
-  const select = useCallback(
-    (id: string | null) => {
-      setSelectedId(id)
-      const fg = fgRef.current
-      const node = data.nodes.find((n) => n.id === id)
-      if (!fg || !node || node.x === undefined || node.y === undefined) return
-      // Keep the node visible next to the detail card.
-      const k = fg.zoom()
-      const narrow = size.width < 768
-      fg.centerAt(
-        narrow ? node.x : node.x + 190 / k,
-        narrow ? node.y + (size.height * 0.28) / k : node.y,
-        500
-      )
-    },
-    [data.nodes, size]
-  )
+  const select = useCallback((id: string | null) => setSelectedId(id), [])
 
   const drawNode = useCallback(
     (node: SimNode, ctx: CanvasRenderingContext2D, scale: number) => {
@@ -326,6 +357,36 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
         ctx.arc(x, y, r + 6 + breath * 3, 0, 2 * Math.PI)
         ctx.fillStyle = glow
         ctx.fill()
+      }
+
+      // The current position sends out a slow sonar ripple and wears a NOW tag.
+      if (d.kind === 'work' && d.status === 'current') {
+        ctx.lineWidth = 1.4
+        const ripple = reducedMotion ? [] : [0, 0.5].map((o) => (frame.current.now / 2400 + o) % 1)
+        for (const t of ripple) {
+          ctx.beginPath()
+          ctx.arc(x, y, r + 3 + t * 18, 0, 2 * Math.PI)
+          ctx.strokeStyle = `rgba(52,211,153,${(0.55 * (1 - t)).toFixed(3)})`
+          ctx.stroke()
+        }
+        ctx.beginPath()
+        ctx.arc(x, y, r + 2.5, 0, 2 * Math.PI)
+        ctx.strokeStyle = 'rgba(52,211,153,0.9)'
+        ctx.stroke()
+
+        const fs = Math.min(10, Math.max(7.5, scale * 2.6)) / scale
+        ctx.font = `700 ${fs}px ui-sans-serif, system-ui, sans-serif`
+        const w = ctx.measureText('NOW').width + fs * 1.1
+        const h = fs * 1.5
+        const top = y - r - 5 - h
+        ctx.beginPath()
+        ctx.roundRect(x - w / 2, top, w, h, h / 2)
+        ctx.fillStyle = '#34d399'
+        ctx.fill()
+        ctx.fillStyle = '#052e1f'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('NOW', x, top + h / 2 + fs * 0.05)
       }
 
       if (isFocus || id === selectedId) {
@@ -412,10 +473,17 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
   )
 
   const isLinkLit = useCallback(
-    (l: SimLink) =>
-      focusId !== null &&
-      (linkEndId(l.source) === focusId || linkEndId(l.target) === focusId),
-    [focusId]
+    (l: SimLink) => {
+      const a = linkEndId(l.source)
+      const b = linkEndId(l.target)
+      if (focusId !== null) return a === focusId || b === focusId
+      if (groupFilter === null) return false
+      return (
+        index.byId.get(a)?.group === groupFilter ||
+        index.byId.get(b)?.group === groupFilter
+      )
+    },
+    [focusId, groupFilter, index]
   )
 
   /** 1 = link touches the focused node, 0 = idle; eased between frames. */
@@ -432,12 +500,39 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
     [isLinkLit]
   )
 
+  // force-graph's own zoom transitions flag the canvas as dragging, which
+  // swallows clicks until they end, so camera glides are stepped per frame instead.
+  const moveCamera = useCallback(
+    (to: Camera, ms: number) => {
+      const fg = fgRef.current
+      if (!fg) return
+      if (ms <= 0 || reducedMotion) {
+        glide.current = null
+        fg.zoom(to.k)
+        fg.centerAt(to.x, to.y)
+        return
+      }
+      const { x, y } = fg.centerAt()
+      glide.current = { from: { x, y, k: fg.zoom() }, to, start: performance.now(), ms }
+    },
+    [reducedMotion]
+  )
+
   // Idle links fade further back while something is focused, and ease back.
   const idleLinkAlpha = useRef(0.28)
   const onFramePre = useCallback(() => {
     const now = performance.now()
     // Clamp so a backgrounded tab doesn't snap everything on return.
     frame.current = { now, dt: Math.min(0.05, (now - frame.current.now) / 1000) }
+    const g = glide.current
+    const fg = fgRef.current
+    if (g && fg) {
+      const t = Math.min(1, (now - g.start) / g.ms)
+      const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2 // ease-in-out cubic
+      fg.zoom(g.from.k + (g.to.k - g.from.k) * e)
+      fg.centerAt(g.from.x + (g.to.x - g.from.x) * e, g.from.y + (g.to.y - g.from.y) * e)
+      if (t === 1) glide.current = null
+    }
     idleLinkAlpha.current = ease(
       idleLinkAlpha.current,
       highlighted ? 0.06 : 0.28,
@@ -457,25 +552,114 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
 
   const zoomBy = (factor: number) => {
     const fg = fgRef.current
-    if (fg) fg.zoom(fg.zoom() * factor, 250)
+    if (!fg) return
+    const { x, y } = fg.centerAt()
+    moveCamera({ x, y, k: Math.min(8, Math.max(0.4, fg.zoom() * factor)) }, 250)
   }
+  /** The part of the canvas the detail card leaves uncovered, in canvas pixels. */
+  const viewport = useCallback(() => {
+    const full = { left: 0, top: 0, width: size.width, height: size.height }
+    if (!selectedId) return full
+    const panel = containerRef.current?.parentElement?.querySelector<HTMLElement>(
+      `[data-detail-panel="${CSS.escape(selectedId)}"]`
+    )
+    if (!panel) return full
+    const gap = 12
+    // offsetLeft/offsetTop ignore the card's enter transform, so this is where it comes to rest.
+    return panel.offsetLeft > size.width / 3
+      ? { ...full, width: panel.offsetLeft - gap } // docked right (desktop)
+      : { ...full, height: panel.offsetTop - gap } // docked bottom (phone)
+  }, [size, selectedId])
+
+  /** Eases the camera so graph point (x, y) sits in the middle of the visible area. */
+  const lookAt = useCallback(
+    (x: number, y: number, k: number, ms: number) => {
+      const fg = fgRef.current
+      if (!fg) return
+      const v = viewport()
+      moveCamera(
+        {
+          x: x + (size.width / 2 - (v.left + v.width / 2)) / k,
+          y: y + (size.height / 2 - (v.top + v.height / 2)) / k,
+          k,
+        },
+        ms
+      )
+    },
+    [size, viewport, moveCamera]
+  )
+
   /** Eases the camera to frame the whole graph (never snaps). */
   const fit = useCallback(
     (ms = 700) => {
       const fg = fgRef.current
       if (!fg || !size.width) return
       const { x, y } = fg.getGraphBbox()
+      const v = viewport()
       const pad = 48
       const k = Math.min(
         MAX_FIT_ZOOM, // small graphs would otherwise be blown up on large screens
-        (size.width - pad * 2) / Math.max(1, x[1] - x[0]),
-        (size.height - pad * 2) / Math.max(1, y[1] - y[0])
+        (v.width - pad * 2) / Math.max(1, x[1] - x[0]),
+        (v.height - pad * 2) / Math.max(1, y[1] - y[0])
       )
-      fg.centerAt((x[0] + x[1]) / 2, (y[0] + y[1]) / 2, ms)
-      fg.zoom(k, ms)
+      lookAt((x[0] + x[1]) / 2, (y[0] + y[1]) / 2, Math.max(0.4, k), ms)
     },
-    [size]
+    [size, viewport, lookAt]
   )
+
+  // Centre the selected node in the space beside (or above) the detail card. Runs
+  // after the card mounts so its real size is known.
+  // When the card closes, frame the whole graph again.
+  const hadSelection = useRef(false)
+  useEffect(() => {
+    const fg = fgRef.current
+    if (!selectedId) {
+      if (hadSelection.current) fit()
+      hadSelection.current = false
+      return
+    }
+    hadSelection.current = true
+    const node = data.nodes.find((n) => n.id === selectedId)
+    if (!fg || node?.x === undefined || node.y === undefined) return
+    lookAt(node.x, node.y, fg.zoom(), 500)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
+
+  /**
+   * The node under a pointer event, tested against live positions. force-graph's
+   * own hit map is repainted at most every 800ms, so with drifting nodes and a
+   * moving camera it often points at where a node used to be.
+   */
+  const nodeAt = useCallback(
+    (ev: { clientX: number; clientY: number }) => {
+      const fg = fgRef.current
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!fg || !rect) return undefined
+      const p = fg.screen2GraphCoords(ev.clientX - rect.left, ev.clientY - rect.top)
+      const slop = (coarse ? 10 : 4) / fg.zoom()
+      let best: SimNode | undefined
+      let bestDist = Infinity
+      for (const n of data.nodes) {
+        const d = Math.hypot((n.x ?? 0) - p.x, (n.y ?? 0) - p.y)
+        if (d <= n.radius + slop && d < bestDist) {
+          best = n
+          bestDist = d
+        }
+      }
+      return best
+    },
+    [coarse, data.nodes]
+  )
+  nodeAtRef.current = nodeAt
+
+  const clickAt = (ev: PointerEvent) => {
+    const n = nodeAt(ev)
+    if (n) return select(String(n.id))
+    setSelectedId(null)
+    setHoverId(null)
+    setGroupFilter(null)
+  }
+  clickAtRef.current = clickAt
 
   const selected = selectedId ? index.byId.get(selectedId) : undefined
   const isTouchEvent = (ev: Event) => ev.type.startsWith('touch')
@@ -525,12 +709,6 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
             // Keep redrawing after the layout settles so motion and fades continue.
             autoPauseRedraw={false}
             linkLineDash={(l) => (l.edge.basis === 'inferred' ? [3, 3] : null)}
-            onNodeHover={(n) => setHoverId(n ? String(n.id) : null)}
-            onNodeClick={(n) => select(String(n.id))}
-            onBackgroundClick={() => {
-              setSelectedId(null)
-              setHoverId(null)
-            }}
             enableNodeDrag={!coarse || explore}
             // Wheel without ctrl/⌘ pans (handled above); pinch arrives as ctrl+wheel.
             enableZoomInteraction={(ev) => ev.ctrlKey || ev.metaKey}
@@ -565,16 +743,34 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
       </div>
 
       {/* Legend */}
-      <ul className="pointer-events-none absolute left-3 top-3 z-10 flex flex-nowrap sm:flex-wrap gap-x-3 gap-y-1 max-w-[calc(100%-1.5rem)] sm:max-w-[75%] overflow-x-auto pointer-events-auto sm:pointer-events-none [scrollbar-width:none] rounded-full sm:rounded-md border border-white/5 sm:border-0 bg-[#0b0f17]/80 backdrop-blur-sm px-3 sm:px-2 py-1 text-[10px] sm:text-[11px] text-slate-400 whitespace-nowrap">
-        {graph.groups.map((g) => (
-          <li key={g.id} className="flex items-center gap-1.5">
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{ background: g.color }}
-            />
-            {g.label}
-          </li>
-        ))}
+      <ul className="absolute left-3 top-3 z-10 flex flex-nowrap sm:flex-wrap gap-x-1 gap-y-1 max-w-[calc(100%-1.5rem)] sm:max-w-[75%] overflow-x-auto [scrollbar-width:none] rounded-full sm:rounded-md border border-white/5 sm:border-0 bg-[#0b0f17]/80 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none px-1.5 sm:px-0 py-0.5 text-[10px] sm:text-[11px] whitespace-nowrap">
+        {graph.groups.map((g) => {
+          const active = groupFilter === g.id
+          return (
+            <li key={g.id}>
+              <button
+                aria-pressed={active}
+                onClick={() => setGroupFilter(active ? null : g.id)}
+                className={`flex items-center gap-1.5 rounded-full px-1.5 sm:px-2 py-0.5 transition-colors ${
+                  active
+                    ? 'bg-white/10 text-slate-100'
+                    : groupFilter
+                      ? 'text-slate-500 hover:text-slate-300'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                }`}
+              >
+                <span
+                  className="w-2 h-2 rounded-full transition-shadow"
+                  style={{
+                    background: g.color,
+                    boxShadow: active ? `0 0 0 3px ${g.color}33` : undefined,
+                  }}
+                />
+                {g.label}
+              </button>
+            </li>
+          )
+        })}
       </ul>
 
       {/* Controls */}
@@ -642,7 +838,7 @@ export default function PrismGraph({ graph }: PrismGraphProps) {
       <AnimatePresence>
         {selected && (
           <DetailCard
-            key={selected.id}
+            key="detail" // one panel; switching nodes swaps its content instead of stacking exits
             node={selected}
             index={index}
             onSelect={select}

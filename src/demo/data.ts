@@ -23,6 +23,7 @@ const nodes: KnowledgeGraph['nodes'] = [
   {
     id: 'northwind',
     kind: 'work',
+    status: 'current', // pulsing ring and a NOW tag
     group: 'experience',
     label: 'Northwind Labs',
     title: 'Northwind Labs',
@@ -142,11 +143,11 @@ const nodes: KnowledgeGraph['nodes'] = [
     label: 'Tidepool',
     title: 'Tidepool',
     summary:
-      'Self-hosted RSS reader with full-text search and a tiny Go backend. Still in progress.',
+      'Self-hosted RSS reader with full-text search and a tiny Go backend. On hold for now.',
     logo: asset('tidepool.svg'),
     images: [asset('tidepool-banner.svg')],
     links: [{ label: 'Example source', url: 'https://example.com/' }],
-    status: 'in-progress',
+    status: 'paused',
   },
   {
     id: 'pixelpantry',

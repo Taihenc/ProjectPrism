@@ -80,6 +80,7 @@ export function DetailCard({
       transition={{ duration: 0.22, ease: 'easeOut' }}
       className="absolute z-20 inset-x-2 bottom-2 max-h-[62%] md:inset-x-auto md:right-3 md:top-3 md:bottom-3 md:max-h-none md:w-[23rem] flex flex-col rounded-xl border border-white/10 bg-[#0d131d]/95 text-slate-300 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.8)] backdrop-blur-md overflow-hidden"
       aria-label={`Details: ${node.label}`}
+      data-detail-panel={node.id}
     >
       <div className="h-[3px] w-full shrink-0" style={{ background: color }} />
       <header className="flex items-start gap-3 px-4 pt-4 pb-3 shrink-0">
@@ -97,11 +98,29 @@ export function DetailCard({
           {node.kind === 'work' && node.organization && (
             <p className="text-xs text-slate-400 mt-0.5">{node.organization}</p>
           )}
-          {node.kind === 'work' && (engagements.length > 0 || node.remote) && (
+          {node.kind === 'work' && (engagements.length > 0 || node.remote || node.status) && (
             <div className="flex flex-wrap gap-1.5 mt-2">
+              {node.status === 'current' && (
+                <span
+                  className={`${chip} gap-1.5 border-emerald-300/40 bg-emerald-400/15 text-emerald-200`}
+                >
+                  <span className="relative flex w-1.5 h-1.5">
+                    <span className="absolute inset-0 rounded-full bg-emerald-300 motion-safe:animate-ping" />
+                    <span className="relative w-1.5 h-1.5 rounded-full bg-emerald-300" />
+                  </span>
+                  Current position
+                </span>
+              )}
               {engagements.map((e) => (
                 <EngagementChip key={e} engagement={e} />
               ))}
+              {node.status === 'paused' && (
+                <span
+                  className={`${chip} border-slate-300/25 bg-slate-400/10 text-slate-400`}
+                >
+                  On hold
+                </span>
+              )}
               {node.remote && (
                 <span
                   className={`${chip} border-slate-300/25 bg-slate-400/10 text-slate-300`}
@@ -153,11 +172,6 @@ export function DetailCard({
                 ))}
               </ul>
             )}
-            {node.status === 'in-progress' && (
-              <span className="inline-block text-[11px] px-2 py-0.5 rounded-full border border-amber-300/30 text-amber-200/90">
-                in progress
-              </span>
-            )}
             <p>{node.summary}</p>
             {node.highlights && (
               <ul className="space-y-1.5 text-[13px]">
@@ -172,15 +186,34 @@ export function DetailCard({
                 ))}
               </ul>
             )}
+            {node.links && node.links.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {node.links.map((l) => (
+                  <a
+                    key={l.url}
+                    href={l.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-3 py-1.5 text-xs text-slate-100 hover:border-white/40 hover:bg-white/5"
+                  >
+                    {l.label}
+                    <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
+                  </a>
+                ))}
+              </div>
+            )}
             {node.images && node.images.length > 0 && (
-              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 snap-x">
+              // Wrapped rows, so every photo is visible without a hidden sideways scroll.
+              <div className="flex flex-wrap gap-2">
                 {node.images.map((src) => (
                   <SkeletonImage
                     key={src}
                     src={src}
                     loading="lazy"
-                    wrapperClassName="h-28 min-w-[9rem] shrink-0 rounded-md snap-start"
-                    className="h-28 w-auto object-cover"
+                    // Placeholder width only while loading; afterwards the frame hugs the image.
+                    wrapperClassName="h-24 max-w-full rounded-md"
+                    loadingClassName="w-36"
+                    className="h-24 w-auto object-cover"
                   />
                 ))}
               </div>
@@ -226,22 +259,6 @@ export function DetailCard({
           </div>
         )}
 
-        {node.kind === 'work' && node.links && node.links.length > 0 && (
-          <div className="flex flex-wrap gap-2 pt-1">
-            {node.links.map((l) => (
-              <a
-                key={l.url}
-                href={l.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-3 py-1.5 text-xs text-slate-100 hover:border-white/40 hover:bg-white/5"
-              >
-                {l.label}
-                <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
-              </a>
-            ))}
-          </div>
-        )}
       </div>
     </motion.aside>
   )
