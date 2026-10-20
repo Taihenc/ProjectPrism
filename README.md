@@ -115,13 +115,14 @@ The graph fills its parent, so the parent needs a height.
 | `topic` node | A skill, language or domain. Works sharing a topic are linked through it. |
 | edge | A relation plus its `evidence`. `stated` edges are solid, `inferred` ones dashed. |
 | `keywords` | Tags on a work. `withKeywords` turns each one into a small shared node, so you can group works without writing nodes by hand. |
-| groups | Colours and legend entries for nodes. Clicking a legend entry highlights that group. |
+| groups | Colours and legend entries for nodes. Clicking a legend entry highlights that group. An optional `weight` (default 1) sets how strongly sharing a node of that group pulls works together: e.g. `weight: 8` on job types keeps all internships in one area. Single nodes can override it with their own `weight`. |
 | `engagement` | `internship`, `part-time`, `full-time`, `volunteer` or `side-project`; set per role or on the work. Shown as chips. |
 | `status` | `current` for the position you hold now, `paused` for unfinished work on hold. |
 
 Layout: works that share neighbours are pulled together (weighted Jaccard over
-shared neighbours, where rare neighbours count more), and unrelated works push
-apart, so related work forms visible clusters.
+shared neighbours, where each neighbour counts `weight / degree`: rare
+neighbours and heavy groups count more), and unrelated works push apart, so
+related work forms visible clusters.
 
 ## Project layout
 
